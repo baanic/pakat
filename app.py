@@ -3,12 +3,15 @@ import json
 import os
 from datetime import datetime, timedelta
 import jdatetime
+from models import db, Task
 from auth import auth
 
 app = Flask(__name__)
 app.secret_key = "secret-key"
+app.config["SQLALCHEMY_DATABASE_URI"] = "sqlite:///pakat.db"
+app.config["SQLALCHEMY_TRACK_MODIFICATIONS"] = False
+db.init_app(app)
 app.register_blueprint(auth)
-
 DATA_FILE = "data/tasks.json"
 
 def load_tasks():
@@ -33,28 +36,27 @@ def dashboard():
     if "user" not in session:
         return redirect(url_for("auth.login"))
 
-    tasks = load_tasks()
+    user_id = session.get("user")
+    tasks = Task.query.filter_by(user_id=user_id).all()
+
     today = datetime.today().date()
     tomorrow = today + timedelta(days=1)
     week = today + timedelta(days=7)
 
     def categorize(task):
-        if task.get("completed"): return "nodate"
-        if not task.get("date"): return "nodate"
+        if task.completed: return "nodate"
+        if not task.date: return "nodate"
         try:
-            d = datetime.fromisoformat(task["date"]).date()
+            d = datetime.fromisoformat(task.date).date()
             if d <= today: return "today"
             elif d == tomorrow: return "tomorrow"
             elif d <= week: return "week"
         except: return "nodate"
         return "nodate"
 
-    categorized = {
-        "today": [], "tomorrow": [], "week": [], "nodate": []
-    }
-
+    categorized = {"today": [], "tomorrow": [], "week": [], "nodate": []}
     for task in tasks:
-        task["jalali_time"] = jalali_date(task.get("date")) if task.get("date") else ""
+        task.jalali_time = jdatetime.date.fromgregorian(date=datetime.fromisoformat(task.date).date()).strftime("%Y/%m/%d") if task.date else ""
         categorized[categorize(task)].append(task)
 
     return render_template("dashboard.html",
