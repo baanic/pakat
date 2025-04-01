@@ -1,0 +1,131 @@
+
+<!DOCTYPE html>
+<html lang="fa">
+<head>
+  <meta charset="UTF-8">
+  <title>داشبورد | پاکت</title>
+  <link rel="stylesheet" href="/static/css/Style.css">
+  <script defer src="/static/js/main.js"></script>
+</head>
+<body>
+  <header>
+    <h1>پاکت | مدیریت کارها</h1>
+    <button onclick="toggleTheme()">تغییر تم</button>
+  </header>
+
+  <div class="pakat-container">
+    <!-- فیلتر -->
+    <div class="filter-bar">
+      <strong>فیلتر:</strong>
+      <label><input type="checkbox" onchange="applyFilters()" id="filterIncomplete"> فقط انجام‌نشده</label>
+      <label><input type="checkbox" onchange="applyFilters()" id="filterHighPriority"> فقط اولویت بالا</label>
+      <input type="text" id="filterTag" placeholder="برچسب (مثلاً: خرید)" oninput="applyFilters()">
+    </div>
+
+    <div class="container">
+      {% for section_title, section_tasks in [
+        ("امروز", tasks_today),
+        ("فردا", tasks_tomorrow),
+        ("هفته آینده", tasks_week),
+        ("بدون تاریخ", tasks_nodate)
+      ] %}
+        <h2>{{ section_title }}</h2>
+        <div class="task-section" data-section="{{ section_title }}" ondrop="handleDrop(event)" ondragover="allowDrop(event)">
+          {% for task in section_tasks %}
+            <div class="task-item priority-{{ task.priority }} {% if task.completed %}completed{% endif %}"
+                 data-id="{{ task.id }}" draggable="true" ondragstart="handleDrag(event)"
+                 data-complete="{{ 'true' if task.completed else 'false' }}" data-priority="{{ task.priority }}" data-tags="{{ ','.join(task.tags or []) }}">
+              <form method="POST" action="/toggle-completed/{{ task.id }}">
+                <input type="checkbox" onchange="this.form.submit()" {% if task.completed %}checked{% endif %}>
+                <span class="task-info">{{ task.text }}</span>
+              </form>
+              <div class="task-meta">{{ task.jalali_time }}</div>
+              {% if task.tags %}
+                <div class="task-tags">
+                  {% for tag in task.tags %}
+                    <span class="tag">#{{ tag }}</span>
+                  {% endfor %}
+                </div>
+              {% endif %}
+{% if task.subtasks %}
+  <ul class="subtasks">
+    {% for sub in task.subtasks %}
+      <li>
+        <form method="POST" action="/toggle-subtask/{{ task.id }}/{{ sub.id }}">
+          <input type="checkbox" onchange="this.form.submit()" {% if sub.completed %}checked{% endif %}>
+          <span class="{% if sub.completed %}completed{% endif %}">{{ sub.text }}</span>
+        </form>
+      </li>
+    {% endfor %}
+  </ul>
+{% endif %}
+
+<form method="POST" action="/add-subtask/{{ task.id }}">
+  <input type="text" name="subtask" placeholder="افزودن زیرتسک...">
+  <button type="submit">+</button>
+</form>
+
+              {% if task.completed %}
+                <form method="POST" action="/archive-task/{{ task.id }}">
+                  <button type="submit">📦 آرشیو</button>
+                </form>
+              {% endif %}
+            </div>
+          {% endfor %}
+        </div>
+      {% endfor %}
+    </div>
+  </div>
+
+  <script>
+    let draggedItem = null;
+
+    function allowDrop(e) { e.preventDefault(); }
+    function handleDrag(e) { draggedItem = e.target; }
+    function handleDrop(e) {
+      e.preventDefault();
+      const target = e.target.closest(".task-section");
+      if (!draggedItem || !target || draggedItem === e.target) return;
+      target.appendChild(draggedItem);
+      saveOrder();
+    }
+
+    function saveOrder() {
+      const allItems = document.querySelectorAll(".task-item");
+      const order = [...allItems].map(item => parseInt(item.dataset.id));
+      fetch("/reorder-tasks", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ order })
+      });
+    }
+
+    function toggleTheme() {
+      document.body.classList.toggle('dark-mode');
+      const mode = document.body.classList.contains('dark-mode') ? 'dark' : 'light';
+      localStorage.setItem('theme', mode);
+    }
+
+    window.onload = () => {
+      const saved = localStorage.getItem('theme');
+      if (saved === 'dark') document.body.classList.add('dark-mode');
+    }
+
+    function applyFilters() {
+      const showIncomplete = document.getElementById('filterIncomplete').checked;
+      const showHighPriority = document.getElementById('filterHighPriority').checked;
+      const tagFilter = document.getElementById('filterTag').value.trim();
+      document.querySelectorAll('.task-item').forEach(task => {
+        const isDone = task.dataset.complete === 'true';
+        const priority = task.dataset.priority;
+        const tags = task.dataset.tags.split(',');
+        let visible = true;
+        if (showIncomplete && isDone) visible = false;
+        if (showHighPriority && priority !== 'high') visible = false;
+        if (tagFilter && !tags.includes(tagFilter)) visible = false;
+        task.style.display = visible ? 'block' : 'none';
+      });
+    }
+  </script>
+</body>
+</html>
