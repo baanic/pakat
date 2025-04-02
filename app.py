@@ -1,114 +1,86 @@
-from flask import Flask, render_template, request, redirect, url_for, jsonify, session
-import json
-import os
+from flask import Flask, render_template, request, redirect, url_for, session, flash
+from flask_sqlalchemy import SQLAlchemy
 from datetime import datetime, timedelta
-import jdatetime
+from auth import auth_bp
 from models import db, Task
-from auth import auth
+from flask_migrate import Migrate
+import jdatetime
 
 app = Flask(__name__)
-app.secret_key = "secret-key"
-app.config["SQLALCHEMY_DATABASE_URI"] = "sqlite:///pakat.db"
-app.config["SQLALCHEMY_TRACK_MODIFICATIONS"] = False
+app.secret_key = "replace-this-with-env-var"
+app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///tasks.db'
+app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
+
+# Init database
 db.init_app(app)
-app.register_blueprint(auth)
-DATA_FILE = "data/tasks.json"
+with app.app_context():
+    db.create_all()
 
-def load_tasks():
-    if not os.path.exists(DATA_FILE): return []
-    with open(DATA_FILE, "r", encoding="utf-8") as f:
-        return json.load(f)
+migrate = Migrate(app, db)
 
-def save_tasks(tasks):
-    with open(DATA_FILE, "w", encoding="utf-8") as f:
-        json.dump(tasks, f, ensure_ascii=False, indent=2)
+# Register authentication blueprint
+app.register_blueprint(auth_bp)
 
-def jalali_date(iso_date):
-    try:
-        g_date = datetime.fromisoformat(iso_date)
-        j_date = jdatetime.date.fromgregorian(date=g_date.date())
-        return j_date.strftime("%Y/%m/%d")
-    except:
-        return "نامشخص"
-
-@app.route("/")
-def dashboard():
-    if "user" not in session:
-        return redirect(url_for("auth.login"))
-
-    user_id = session.get("user")
-    tasks = Task.query.filter_by(user_id=user_id).all()
-
-    today = datetime.today().date()
+@app.route('/')
+def index():
+    today = datetime.now().date()
     tomorrow = today + timedelta(days=1)
-    week = today + timedelta(days=7)
+    week_later = today + timedelta(days=7)
 
-    def categorize(task):
-        if task.completed: return "nodate"
-        if not task.date: return "nodate"
-        try:
-            d = datetime.fromisoformat(task.date).date()
-            if d <= today: return "today"
-            elif d == tomorrow: return "tomorrow"
-            elif d <= week: return "week"
-        except: return "nodate"
-        return "nodate"
+    tasks_today = Task.query.filter(Task.due_date == today, Task.completed == False).all()
+    tasks_tomorrow = Task.query.filter(Task.due_date == tomorrow, Task.completed == False).all()
+    tasks_week = Task.query.filter(Task.due_date > tomorrow, Task.due_date <= week_later, Task.completed == False).all()
+    tasks_no_date = Task.query.filter((Task.due_date == None) & (Task.completed == False)).all()
+    tasks_completed = Task.query.filter(Task.completed == True).all()
 
-    categorized = {"today": [], "tomorrow": [], "week": [], "nodate": []}
-    for task in tasks:
-        task.jalali_time = jdatetime.date.fromgregorian(date=datetime.fromisoformat(task.date).date()).strftime("%Y/%m/%d") if task.date else ""
-        categorized[categorize(task)].append(task)
-
-    return render_template("dashboard.html",
-        tasks_today=categorized["today"],
-        tasks_tomorrow=categorized["tomorrow"],
-        tasks_week=categorized["week"],
-        tasks_nodate=categorized["nodate"]
+    return render_template('index.html',
+        tasks_today=tasks_today,
+        tasks_tomorrow=tasks_tomorrow,
+        tasks_week=tasks_week,
+        tasks_no_date=tasks_no_date,
+        tasks_completed=tasks_completed,
+        jdatetime=jdatetime
     )
 
-@app.route("/add-task", methods=["POST"])
+@app.route('/add-task', methods=['POST'])
 def add_task():
-    data = request.get_json()
-    tasks = load_tasks()
-    new_task = {
-        "id": max([t["id"] for t in tasks], default=0) + 1,
-        "title": data.get("title", ""),
-        "date": "",
-        "priority": "medium",
-        "completed": False,
-        "tags": []
-    }
-    tasks.append(new_task)
-    save_tasks(tasks)
-    return jsonify({"ok": True})
+    title = request.form.get('title')
+    due_date = request.form.get('due_date')
 
-@app.route("/delete-task", methods=["POST"])
-def delete_task():
-    task_id = request.json.get("id")
-    tasks = load_tasks()
-    tasks = [t for t in tasks if t["id"] != task_id]
-    save_tasks(tasks)
-    return jsonify({"status": "deleted"})
+    if not title:
+        flash("عنوان نمی‌تونه خالی باشه.", 'error')
+        return redirect(url_for('index'))
 
-@app.route("/complete-task", methods=["POST"])
-def complete_task():
-    task_id = request.json.get("id")
-    tasks = load_tasks()
-    for task in tasks:
-        if task["id"] == task_id:
-            task["completed"] = True
-            break
-    save_tasks(tasks)
-    return jsonify({"status": "completed"})
+    if due_date:
+        try:
+            due_date = datetime.strptime(due_date, '%Y-%m-%d').date()
+        except ValueError:
+            flash("تاریخ نامعتبر است.", 'error')
+            return redirect(url_for('index'))
+    else:
+        due_date = None
 
-@app.route("/reorder-tasks", methods=["POST"])
-def reorder_tasks():
-    ids = request.json.get("order", [])
-    tasks = load_tasks()
-    task_map = {t["id"]: t for t in tasks}
-    new_order = [task_map[i] for i in ids if i in task_map]
-    save_tasks(new_order)
-    return jsonify({"ok": True})
+    task = Task(title=title, due_date=due_date)
+    db.session.add(task)
+    db.session.commit()
+    flash("وظیفه با موفقیت اضافه شد!", 'success')
+    return redirect(url_for('index'))
 
-if __name__ == "__main__":
+@app.route('/delete-task/<int:task_id>', methods=['POST'])
+def delete_task(task_id):
+    task = Task.query.get_or_404(task_id)
+    db.session.delete(task)
+    db.session.commit()
+    flash("وظیفه حذف شد.", 'success')
+    return redirect(url_for('index'))
+
+@app.route('/complete-task/<int:task_id>', methods=['POST'])
+def complete_task(task_id):
+    task = Task.query.get_or_404(task_id)
+    task.completed = True
+    db.session.commit()
+    flash("وظیفه با موفقیت کامل شد!", 'success')
+    return redirect(url_for('index'))
+
+if __name__ == '__main__':
     app.run(debug=True)

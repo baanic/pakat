@@ -1,48 +1,65 @@
-
 from flask import Blueprint, render_template, request, redirect, url_for, session
-import json
-import os
-import hashlib
+from werkzeug.security import generate_password_hash, check_password_hash
+from models import db, User
 
-auth = Blueprint('auth', __name__)
-USER_FILE = "data/users.json"
-
-def load_users():
-    if not os.path.exists(USER_FILE): return {}
-    with open(USER_FILE, "r", encoding="utf-8") as f:
-        return json.load(f)
-
-def save_users(users):
-    with open(USER_FILE, "w", encoding="utf-8") as f:
-        json.dump(users, f, ensure_ascii=False, indent=2)
-
-def hash_pass(password):
-    return hashlib.sha256(password.encode()).hexdigest()
+auth = Blueprint("auth", __name__)
 
 @auth.route("/register", methods=["GET", "POST"])
 def register():
     if request.method == "POST":
-        users = load_users()
-        username = request.form.get("username")
-        password = request.form.get("password")
-        if username in users:
-            return "کاربر قبلاً وجود دارد"
-        users[username] = hash_pass(password)
-        save_users(users)
+        username = request.form["username"]
+        password = request.form["password"]
+        existing = User.query.filter_by(username=username).first()
+        if existing:
+            return "نام کاربری قبلاً ثبت شده است."
+        hashed_pw = generate_password_hash(password)
+        new_user = User(username=username, password=hashed_pw)
+        db.session.add(new_user)
+        db.session.commit()
         return redirect(url_for("auth.login"))
-    return render_template("register.html")
+    return '''
+    <!DOCTYPE html>
+    <html lang="fa">
+    <head><meta charset="UTF-8"><title>ثبت‌نام</title></head>
+    <body>
+        <h2>فرم ثبت‌نام</h2>
+        <form method="POST">
+            <label>نام کاربری:</label>
+            <input type="text" name="username" required><br>
+            <label>رمز عبور:</label>
+            <input type="password" name="password" required><br>
+            <button type="submit">ثبت‌نام</button>
+        </form>
+    </body>
+    </html>
+    '''
 
 @auth.route("/login", methods=["GET", "POST"])
 def login():
     if request.method == "POST":
-        users = load_users()
-        username = request.form.get("username")
-        password = request.form.get("password")
-        if username in users and users[username] == hash_pass(password):
-            session["user"] = username
-            return redirect(url_for("dashboard"))
-        return "اطلاعات ورود اشتباه است"
-    return render_template("login.html")
+        username = request.form["username"]
+        password = request.form["password"]
+        user = User.query.filter_by(username=username).first()
+        if not user or not check_password_hash(user.password, password):
+            return "اطلاعات ورود نادرست است."
+        session["user"] = user.id
+        return redirect(url_for("dashboard"))
+    return '''
+    <!DOCTYPE html>
+    <html lang="fa">
+    <head><meta charset="UTF-8"><title>ورود</title></head>
+    <body>
+        <h2>فرم ورود</h2>
+        <form method="POST">
+            <label>نام کاربری:</label>
+            <input type="text" name="username" required><br>
+            <label>رمز عبور:</label>
+            <input type="password" name="password" required><br>
+            <button type="submit">ورود</button>
+        </form>
+    </body>
+    </html>
+    '''
 
 @auth.route("/logout")
 def logout():
